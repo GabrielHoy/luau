@@ -466,23 +466,50 @@ int lua_type(lua_State* L, int idx)
     return (o == luaO_nilobject) ? LUA_TNONE : ttype(o);
 }
 
+/** @brief Returns the name string for a LUA_T* type constant.
+ *
+ *  Does not inspect the stack — takes a type tag integer directly.  Returns
+ *  "no value" for LUA_TNONE.  The returned string has static lifetime.
+ *
+ *  @param L  The Lua state (unused but required by the API signature).
+ *  @param t  A LUA_T* type constant.
+ *  @return   Human-readable type name (e.g. "string", "table", "no value"). */
 const char* lua_typename(lua_State* L, int t)
 {
     return (t == LUA_TNONE) ? "no value" : luaT_typenames[t];
 }
 
+/** @brief Returns 1 if the value at `idx` is a C closure (pushed via lua_pushcfunction).
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     1 if a C function/closure, 0 otherwise. */
 int lua_iscfunction(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
     return iscfunction(o);
 }
 
+/** @brief Returns 1 if the value at `idx` is a Luau bytecode function (Lua closure).
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     1 if a Lua closure, 0 otherwise. */
 int lua_isLfunction(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
     return isLfunction(o);
 }
 
+/** @brief Returns 1 if the value at `idx` can be converted to a number.
+ *
+ *  Returns 1 for actual numbers AND for strings that represent valid numbers
+ *  (coercion).  Use `lua_type(L, idx) == LUA_TNUMBER` if you want strict
+ *  type checking without coercion.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     1 if number or coercible string, 0 otherwise. */
 int lua_isnumber(lua_State* L, int idx)
 {
     TValue n;
@@ -490,18 +517,44 @@ int lua_isnumber(lua_State* L, int idx)
     return tonumber(o, &n);
 }
 
+/** @brief Returns 1 if the value at `idx` is a string OR a number (both produce strings).
+ *
+ *  Numbers can be coerced to strings in Lua, so this returns 1 for both types.
+ *  Use `lua_type(L, idx) == LUA_TSTRING` for strict string-only checking.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     1 if string or number, 0 otherwise. */
 int lua_isstring(lua_State* L, int idx)
 {
     int t = lua_type(L, idx);
     return (t == LUA_TSTRING || t == LUA_TNUMBER);
 }
 
+/** @brief Returns 1 if the value at `idx` is full userdata OR light userdata.
+ *
+ *  Use `lua_type(L, idx) == LUA_TUSERDATA` if you need to distinguish between
+ *  the two kinds (full = GC-managed block; light = raw unmanaged pointer).
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     1 if full or light userdata, 0 otherwise. */
 int lua_isuserdata(lua_State* L, int idx)
 {
     const TValue* o = index2addr(L, idx);
     return (ttisuserdata(o) || ttislightuserdata(o));
 }
 
+/** @brief Compares two values for equality WITHOUT invoking `__eq` metamethods.
+ *
+ *  Primitive equality: two values are equal only if they have the same type
+ *  and value.  Tables and userdata compare by identity (pointer equality).
+ *  Returns 0 if either index is invalid.
+ *
+ *  @param L       The Lua state.
+ *  @param index1  Stack index of the first value.
+ *  @param index2  Stack index of the second value.
+ *  @return        1 if values are primitively equal, 0 otherwise. */
 int lua_rawequal(lua_State* L, int index1, int index2)
 {
     StkId o1 = index2addr(L, index1);
@@ -509,6 +562,15 @@ int lua_rawequal(lua_State* L, int index1, int index2)
     return (o1 == luaO_nilobject || o2 == luaO_nilobject) ? 0 : luaO_rawequalObj(o1, o2);
 }
 
+/** @brief Compares two values for equality, invoking `__eq` if applicable.
+ *
+ *  Uses full Lua equality semantics including metamethod dispatch.  Can call
+ *  back into Lua code.  Returns 0 if either index is invalid.
+ *
+ *  @param L       The Lua state.
+ *  @param index1  Stack index of the first value.
+ *  @param index2  Stack index of the second value.
+ *  @return        1 if values are equal (by Lua rules), 0 otherwise. */
 int lua_equal(lua_State* L, int index1, int index2)
 {
     StkId o1, o2;
@@ -519,6 +581,15 @@ int lua_equal(lua_State* L, int index1, int index2)
     return i;
 }
 
+/** @brief Returns 1 if `index1 < index2` using Lua's `<` operator semantics.
+ *
+ *  Dispatches through `__lt` metamethods when applicable.  Returns 0 if
+ *  either index is invalid.
+ *
+ *  @param L       The Lua state.
+ *  @param index1  Stack index of the left-hand value.
+ *  @param index2  Stack index of the right-hand value.
+ *  @return        1 if LHS < RHS, 0 otherwise. */
 int lua_lessthan(lua_State* L, int index1, int index2)
 {
     StkId o1, o2;
@@ -529,6 +600,15 @@ int lua_lessthan(lua_State* L, int index1, int index2)
     return i;
 }
 
+/** @brief Converts the value at `idx` to a double; reports success via `*isnum`.
+ *
+ *  Attempts numeric coercion for strings.  Sets `*isnum = 1` on success,
+ *  `*isnum = 0` and returns 0.0 on failure.  `isnum` may be NULL.
+ *
+ *  @param L      The Lua state.
+ *  @param idx    Stack index.
+ *  @param isnum  Out-param set to 1 on success, 0 on failure (may be NULL).
+ *  @return       The number as a double, or 0.0 on failure. */
 double lua_tonumberx(lua_State* L, int idx, int* isnum)
 {
     TValue n;
@@ -547,6 +627,15 @@ double lua_tonumberx(lua_State* L, int idx, int* isnum)
     }
 }
 
+/** @brief Converts the value at `idx` to an int (truncates fractional part).
+ *
+ *  Attempts numeric coercion for strings.  Sets `*isnum` and returns 0 on
+ *  failure.  `isnum` may be NULL.
+ *
+ *  @param L      The Lua state.
+ *  @param idx    Stack index.
+ *  @param isnum  Out-param (may be NULL).
+ *  @return       Truncated integer value, or 0 on failure. */
 int lua_tointegerx(lua_State* L, int idx, int* isnum)
 {
     TValue n;
@@ -568,6 +657,14 @@ int lua_tointegerx(lua_State* L, int idx, int* isnum)
     }
 }
 
+/** @brief Converts the value at `idx` to an unsigned integer.
+ *
+ *  Same semantics as `lua_tointegerx` but returns unsigned.
+ *
+ *  @param L      The Lua state.
+ *  @param idx    Stack index.
+ *  @param isnum  Out-param (may be NULL).
+ *  @return       Unsigned integer value, or 0 on failure. */
 unsigned lua_tounsignedx(lua_State* L, int idx, int* isnum)
 {
     TValue n;
@@ -589,12 +686,33 @@ unsigned lua_tounsignedx(lua_State* L, int idx, int* isnum)
     }
 }
 
+/** @brief Returns 1 if the value at `idx` is truthy (anything except nil and false).
+ *
+ *  This is NOT a strict boolean check — numbers, strings, tables, etc. all
+ *  return 1.  Use `lua_isboolean` + `lua_toboolean` if you need strict boolean.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     0 if nil or false, 1 for everything else. */
 int lua_toboolean(lua_State* L, int idx)
 {
     const TValue* o = index2addr(L, idx);
     return !l_isfalse(o);
 }
 
+/** @brief Converts the value at `idx` to a C string; coerces numbers.
+ *
+ *  If the value is a number, it is converted to a string in-place on the
+ *  stack (modifying the slot).  Returns NULL if conversion is not possible.
+ *  The returned pointer is valid only until the value is popped or the string
+ *  is otherwise GC'd — do not store it across Lua API calls.
+ *
+ *  @note If `len` is non-NULL, it receives the byte length (safe for embedded NULs).
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @param len  Out-param for string length (may be NULL).
+ *  @return     Pointer to the interned string bytes, or NULL on failure. */
 const char* lua_tolstring(lua_State* L, int idx, size_t* len)
 {
     StkId o = index2addr(L, idx);
@@ -615,6 +733,17 @@ const char* lua_tolstring(lua_State* L, int idx, size_t* len)
     return svalue(o);
 }
 
+/** @brief Returns the string data at `idx` and its Luau "atom" (interned integer ID).
+ *
+ *  Atoms are small integers assigned by the `useratom` callback when a string
+ *  is first interned.  They allow O(1) string comparison against known symbols.
+ *  Returns NULL if the value is not a string (no coercion).  Sets `*atom = -1`
+ *  if no `useratom` callback is configured.
+ *
+ *  @param L     The Lua state.
+ *  @param idx   Stack index.
+ *  @param atom  Out-param for the atom integer (may be NULL).
+ *  @return      Pointer to the NUL-terminated string data, or NULL. */
 const char* lua_tostringatom(lua_State* L, int idx, int* atom)
 {
     StkId o = index2addr(L, idx);
@@ -629,6 +758,16 @@ const char* lua_tostringatom(lua_State* L, int idx, int* atom)
     return getstr(s);
 }
 
+/** @brief Like `lua_tostringatom` but also returns the byte length via `*len`.
+ *
+ *  Combines the functionality of `lua_tolstring` and `lua_tostringatom`.
+ *  Safe for strings with embedded NUL bytes.
+ *
+ *  @param L     The Lua state.
+ *  @param idx   Stack index.
+ *  @param len   Out-param for byte length (may be NULL).
+ *  @param atom  Out-param for atom integer (may be NULL).
+ *  @return      Pointer to string data, or NULL if not a string. */
 const char* lua_tolstringatom(lua_State* L, int idx, size_t* len, int* atom)
 {
     StkId o = index2addr(L, idx);
@@ -652,6 +791,18 @@ const char* lua_tolstringatom(lua_State* L, int idx, size_t* len, int* atom)
     return getstr(s);
 }
 
+/** @brief Returns the method name string from the most recent `__namecall` dispatch.
+ *
+ *  When the VM executes a method call `obj:method(...)`, it sets the
+ *  `namecall` field on the state before invoking `__namecall`.  This lets the
+ *  metamethod dispatcher identify which method was called via a single shared
+ *  `__namecall` handler rather than per-method closures.
+ *
+ *  Returns NULL if not currently inside a `__namecall` invocation.
+ *
+ *  @param L     The Lua state.
+ *  @param atom  Out-param for the atom integer (may be NULL).
+ *  @return      Method name string, or NULL if not in a namecall context. */
 const char* lua_namecallatom(lua_State* L, int* atom)
 {
     TString* s = L->namecall;
@@ -665,6 +816,15 @@ const char* lua_namecallatom(lua_State* L, int* atom)
     return getstr(s);
 }
 
+/** @brief Returns a pointer to the float components of a vector value at `idx`.
+ *
+ *  Luau has a native vector type (LUA_TVECTOR).  When `LUA_VECTOR_SIZE == 4`
+ *  the array has 4 components (xyzw); otherwise 3 (xyz).
+ *  Returns NULL if the value is not a vector.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     Pointer to float[LUA_VECTOR_SIZE], or NULL if not a vector. */
 const float* lua_tovector(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
@@ -673,6 +833,18 @@ const float* lua_tovector(lua_State* L, int idx)
     return vvalue(o);
 }
 
+/** @brief Returns the "length" of the value at `idx` (the `#` operator).
+ *
+ *  - String: byte length.
+ *  - Userdata: allocated byte size.
+ *  - Buffer: byte length.
+ *  - Table: border (highest integer key n with t[n] != nil), via `luaH_getn`.
+ *  - Other types: 0.
+ *  Does NOT invoke `__len` metamethods (use the VM's length opcode for that).
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     Length in bytes/elements, or 0 for unsupported types. */
 int lua_objlen(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
@@ -691,24 +863,63 @@ int lua_objlen(lua_State* L, int idx)
     }
 }
 
+/** @brief Returns the C function pointer from a C closure at `idx`.
+ *
+ *  Returns NULL if the value is not a C function.  Useful for inspecting or
+ *  comparing registered callbacks.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     The lua_CFunction pointer, or NULL. */
 lua_CFunction lua_tocfunction(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
     return (!iscfunction(o)) ? NULL : cast_to(lua_CFunction, clvalue(o)->c.f);
 }
 
+/** @brief Returns the raw pointer from a light userdata at `idx`.
+ *
+ *  Light userdata is a bare `void*` pushed with `lua_pushlightuserdata`.  It
+ *  is NOT GC-managed — the pointer's lifetime is the caller's responsibility.
+ *  Returns NULL if the value is not light userdata.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     The raw pointer, or NULL if not light userdata. */
 void* lua_tolightuserdata(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
     return (!ttislightuserdata(o)) ? NULL : pvalue(o);
 }
 
+/** @brief Like `lua_tolightuserdata` but also validates the light userdata tag.
+ *
+ *  Returns NULL if the value is not light userdata OR if its tag doesn't match.
+ *  Tags allow multiple light-userdata "types" to coexist with O(1) distinction.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @param tag  Expected tag (0 to LUA_LUTAG_LIMIT-1).
+ *  @return     Raw pointer if type and tag match, NULL otherwise. */
 void* lua_tolightuserdatatagged(lua_State* L, int idx, int tag)
 {
     StkId o = index2addr(L, idx);
     return (!ttislightuserdata(o) || lightuserdatatag(o) != tag) ? NULL : pvalue(o);
 }
 
+/** @brief Returns the data pointer for full userdata or light userdata at `idx`.
+ *
+ *  - Full userdata (`LUA_TUSERDATA`): returns the embedded data block pointer.
+ *    The block is GC-managed; valid until the userdata is collected.
+ *  - Light userdata (`LUA_TLIGHTUSERDATA`): returns the raw pointer as-is.
+ *  - Anything else: returns NULL.
+ *
+ *  This is the primary way to retrieve the C struct pointer from an object
+ *  created with `lua_newuserdatatagged`.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     Data pointer, or NULL if not userdata. */
 void* lua_touserdata(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
