@@ -1574,6 +1574,15 @@ void lua_setfield(lua_State* L, int idx, const char* k)
     L->top--;
 }
 
+/** @brief Pops the top value and stores it as `table[k]` without `__newindex`.
+ *
+ *  Direct hash write — no metamethod dispatch.  Throws if the table is
+ *  read-only.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table (must be a table).
+ *  @param k    String field name.
+ *  Stack: [..., value] → [...] */
 void lua_rawsetfield(lua_State* L, int idx, const char* k)
 {
     api_checknelems(L, 1);
@@ -1586,6 +1595,14 @@ void lua_rawsetfield(lua_State* L, int idx, const char* k)
     L->top--;
 }
 
+/** @brief Pops key and value and stores `table[key] = value` without metamethods.
+ *
+ *  The key type is arbitrary.  Always use this (not `lua_settable`) when
+ *  writing to `LUA_REGISTRYINDEX`.  Throws if the table is read-only.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  Stack: [..., key, value] → [...] */
 void lua_rawset(lua_State* L, int idx)
 {
     api_checknelems(L, 2);
@@ -1598,6 +1615,14 @@ void lua_rawset(lua_State* L, int idx)
     L->top -= 2;
 }
 
+/** @brief Pops the top value and stores it as `table[n]` (integer key) without metamethods.
+ *
+ *  Optimised array-part write.  Throws if the table is read-only.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  @param n    Integer key.
+ *  Stack: [..., value] → [...] */
 void lua_rawseti(lua_State* L, int idx, int n)
 {
     api_checknelems(L, 1);
@@ -1610,6 +1635,16 @@ void lua_rawseti(lua_State* L, int idx, int n)
     L->top--;
 }
 
+/** @brief Pops the top value and stores it as `table[p,tag]` (pointer key) without metamethods.
+ *
+ *  Luau extension: tagged-pointer table keys for efficient C-struct-to-table
+ *  associations without string hashing.  Throws if the table is read-only.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  @param p    Pointer key.
+ *  @param tag  Tag associated with the pointer key.
+ *  Stack: [..., value] → [...] */
 void lua_rawsetptagged(lua_State* L, int idx, void* p, int tag)
 {
     api_checknelems(L, 1);
@@ -1622,6 +1657,17 @@ void lua_rawsetptagged(lua_State* L, int idx, void* p, int tag)
     L->top--;
 }
 
+/** @brief Pops a table (or nil) and sets it as the metatable of the value at `objindex`.
+ *
+ *  - Tables and full userdata: sets their per-object metatable.
+ *  - Other types: sets the shared type-level metatable in `L->global->mt[type]`,
+ *    affecting ALL values of that type in the VM.
+ *  Passing nil clears the metatable.  Throws if the table is read-only.
+ *
+ *  @param L          The Lua state.
+ *  @param objindex   Stack index of the value to modify.
+ *  @return           Always 1.
+ *  Stack: [..., metatable_or_nil] → [...] */
 int lua_setmetatable(lua_State* L, int objindex)
 {
     api_checknelems(L, 1);
@@ -1661,6 +1707,16 @@ int lua_setmetatable(lua_State* L, int objindex)
     return 1;
 }
 
+/** @brief Pops a table and sets it as the environment of the function/thread at `idx`.
+ *
+ *  @warning **Luau restriction**: only works on `LUA_TFUNCTION` and `LUA_TTHREAD`.
+ *  For userdata, returns 0 and does nothing — this is why the AwesomeWM shim
+ *  replaces `lua_setfenv` on userdata with the registry-keyed-by-pointer pattern.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the function or thread.
+ *  @return     1 on success, 0 if the value type does not support environments.
+ *  Stack: [..., table] → [...] */
 int lua_setfenv(lua_State* L, int idx)
 {
     int res = 1;
@@ -1700,6 +1756,18 @@ int lua_setfenv(lua_State* L, int idx)
 
 #define checkresults(L, na, nr) api_check(L, (nr) == LUA_MULTRET || (L->ci->top - L->top >= (nr) - (na)))
 
+/** @brief Calls a Lua function — UNPROTECTED; errors propagate as C longjmps.
+ *
+ *  The function and its `nargs` arguments must already be on the stack (function
+ *  at the bottom, arguments above it).  After the call they are all replaced by
+ *  exactly `nresults` return values (or all results if `nresults == LUA_MULTRET`).
+ *  If an error occurs, it propagates past this call frame — use `lua_pcall` if
+ *  you need to catch errors.
+ *
+ *  @param L        The Lua state.
+ *  @param nargs    Number of arguments on the stack.
+ *  @param nresults Expected number of return values (or LUA_MULTRET for all).
+ *  Stack: [..., func, arg1, ..., argN] → [..., ret1, ..., retR] */
 void lua_call(lua_State* L, int nargs, int nresults)
 {
     StkId func;
@@ -1729,6 +1797,23 @@ static void f_call(lua_State* L, void* ud)
     luaD_call(L, c->func, c->nresults);
 }
 
+/** @brief Calls a Lua function in protected mode; catches errors.
+ *
+ *  Like `lua_call` but wraps the call in a C `setjmp` guard.  On error,
+ *  the stack is restored to its state before the call, the error object is
+ *  pushed, and a non-zero status code is returned.
+ *
+ *  - `errfunc`: if non-zero, the stack index of a message handler function
+ *    called before the stack unwinds (used to add traceback info).  Pass 0
+ *    for no handler.
+ *
+ *  @param L        The Lua state.
+ *  @param nargs    Number of arguments.
+ *  @param nresults Expected return values (or LUA_MULTRET).
+ *  @param errfunc  Stack index of error handler, or 0.
+ *  @return         LUA_OK (0) on success, or LUA_ERRRUN/LUA_ERRMEM/LUA_ERRERR.
+ *  Stack (success): [..., func, args] → [..., rets]
+ *  Stack (error):   [..., func, args] → [..., err_object] */
 int lua_pcall(lua_State* L, int nargs, int nresults, int errfunc)
 {
     api_checknelems(L, nargs + 1);
@@ -1773,6 +1858,17 @@ static void f_Ccall(lua_State* L, void* ud)
     luaD_call(L, L->top - 2, 0);
 }
 
+/** @brief Calls a C function in protected mode, passing a `void*` userdata pointer.
+ *
+ *  Pushes `func` as a C closure and `ud` as a light userdata, then calls
+ *  with 0 results in a protected context.  Does NOT push function + args onto
+ *  the stack beforehand — the C function receives `ud` via its first argument.
+ *  Useful for one-shot protected setup calls.
+ *
+ *  @param L     The Lua state.
+ *  @param func  The C function to call.
+ *  @param ud    Arbitrary pointer passed to `func` as a light userdata argument.
+ *  @return      LUA_OK on success, or an error status code. */
 int lua_cpcall(lua_State* L, lua_CFunction func, void* ud)
 {
     api_check(L, L->status == 0);
@@ -1784,11 +1880,31 @@ int lua_cpcall(lua_State* L, lua_CFunction func, void* ud)
     return luaD_pcall(L, f_Ccall, &c, savestack(L, L->top), 0);
 }
 
+/** @brief Returns the current status code of the Lua state.
+ *
+ *  - `LUA_OK` (0): normal/idle.
+ *  - `LUA_YIELD`: the coroutine has yielded and is waiting to be resumed.
+ *  - `LUA_BREAK`: internal coroutine break state (used by the debugger).
+ *  - Non-zero error code: the coroutine died with an error.
+ *
+ *  @param L  The Lua state.
+ *  @return   LUA_OK, LUA_YIELD, LUA_BREAK, or an error status. */
 int lua_status(lua_State* L)
 {
     return L->status;
 }
 
+/** @brief Returns the coroutine status of `co` as seen from `L`.
+ *
+ *  - `LUA_CORUN`:  `co` is currently running (co == L).
+ *  - `LUA_COSUS`:  suspended (yielded or not yet started).
+ *  - `LUA_CONOR`:  normal — suspended but has active call frames (resumed another coroutine).
+ *  - `LUA_COERR`:  dead due to an unhandled error.
+ *  - `LUA_COFIN`:  finished (returned normally, stack is empty).
+ *
+ *  @param L   The running Lua state (for context).
+ *  @param co  The coroutine to inspect.
+ *  @return    One of the LUA_CO* status constants. */
 int lua_costatus(lua_State* L, lua_State* co)
 {
     if (co == L)
@@ -1806,11 +1922,25 @@ int lua_costatus(lua_State* L, lua_State* co)
     return LUA_COSUS; // initial state
 }
 
+/** @brief Returns the C-side userdata pointer attached to this thread.
+ *
+ *  Each lua_State has a `void* userdata` slot for the embedding application
+ *  to store per-thread state (e.g. a context struct).  Returns NULL if not set.
+ *
+ *  @param L  The Lua state.
+ *  @return   The userdata pointer, or NULL. */
 void* lua_getthreaddata(lua_State* L)
 {
     return L->userdata;
 }
 
+/** @brief Attaches an arbitrary C pointer to this thread for embedder use.
+ *
+ *  The VM does not use or interpret this pointer — it is entirely for the
+ *  host application.  Retrieve it later with `lua_getthreaddata`.
+ *
+ *  @param L     The Lua state.
+ *  @param data  Arbitrary pointer to store. */
 void lua_setthreaddata(lua_State* L, void* data)
 {
     L->userdata = data;
@@ -1820,6 +1950,24 @@ void lua_setthreaddata(lua_State* L, void* data)
 ** Garbage-collection function
 */
 
+/** @brief GC control interface — query stats, trigger collection, tune parameters.
+ *
+ *  `what` selects the operation:
+ *  - `LUA_GCSTOP`       — disable automatic GC.
+ *  - `LUA_GCRESTART`    — re-enable automatic GC.
+ *  - `LUA_GCCOLLECT`    — run a full GC cycle immediately.
+ *  - `LUA_GCCOUNT`      — return total GC memory in KB.
+ *  - `LUA_GCCOUNTB`     — return the fractional byte portion of GC memory.
+ *  - `LUA_GCISRUNNING`  — return 1 if GC is running, 0 if stopped.
+ *  - `LUA_GCSTEP`       — perform `data` KB of incremental GC work.
+ *  - `LUA_GCSETGOAL`    — set the GC heap growth goal percentage; returns old value.
+ *  - `LUA_GCSETSTEPMUL` — set GC step multiplier; returns old value.
+ *  - `LUA_GCSETSTEPSIZE`— set GC step size in KB; returns old value.
+ *
+ *  @param L     The Lua state.
+ *  @param what  Operation selector (LUA_GC* constant).
+ *  @param data  Operation-specific integer parameter.
+ *  @return      Operation-specific integer result, or -1 for invalid `what`. */
 int lua_gc(lua_State* L, int what, int data)
 {
     int res = 0;
@@ -1952,6 +2100,14 @@ int lua_gc(lua_State* L, int what, int data)
 ** miscellaneous functions
 */
 
+/** @brief Throws the value at the top of the stack as a runtime error.
+ *
+ *  Does NOT pop the value — it becomes the error object propagated to the
+ *  nearest `lua_pcall` handler (or terminates the program if unprotected).
+ *  Never returns.  The value can be any type, but is conventionally a string.
+ *
+ *  @param L  The Lua state (top value is the error object).
+ *  Stack: [..., err_object]  (consumed by error propagation) */
 l_noret lua_error(lua_State* L)
 {
     api_checknelems(L, 1);
@@ -1959,6 +2115,21 @@ l_noret lua_error(lua_State* L)
     luaD_throw(L, LUA_ERRRUN);
 }
 
+/** @brief Advances a table iteration; pops the previous key, pushes next key+value.
+ *
+ *  Push a nil key before the first call to start iteration.  Each call pops
+ *  the key at the top of the stack and either:
+ *  - Pushes the next key and value (returns 1), OR
+ *  - Pops the key and returns 0 (iteration finished).
+ *
+ *  @note Table must not be modified during iteration.
+ *  @note For performance-critical iteration, prefer `lua_rawiter`.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  @return     1 if more entries remain, 0 if done.
+ *  Stack (more):  [..., key] → [..., next_key, value]
+ *  Stack (done):  [..., key] → [...] */
 int lua_next(lua_State* L, int idx)
 {
     luaC_threadbarrier(L);
@@ -1974,6 +2145,21 @@ int lua_next(lua_State* L, int idx)
     return more;
 }
 
+/** @brief Luau-specific stateless table iterator using an integer cursor.
+ *
+ *  More efficient than `lua_next` because it avoids key hashing and doesn't
+ *  require the key to be on the stack.  Pass `iter = 0` to start; pass the
+ *  returned value as `iter` for each subsequent call.
+ *
+ *  Returns -1 when iteration is complete.  On each successful step, pushes
+ *  the key and value onto the stack.
+ *
+ *  @param L     The Lua state.
+ *  @param idx   Stack index of the table.
+ *  @param iter  Iteration cursor (0 to start, or the previous return value).
+ *  @return      New cursor value, or -1 if iteration is complete.
+ *  Stack (more):  [...] → [..., key, value]
+ *  Stack (done):  [...] → [...] */
 int lua_rawiter(lua_State* L, int idx, int iter)
 {
     luaC_threadbarrier(L);
@@ -2020,6 +2206,16 @@ int lua_rawiter(lua_State* L, int idx, int iter)
     return -1;
 }
 
+/** @brief Concatenates the top `n` string/number values on the stack.
+ *
+ *  Pops `n` values and pushes a single concatenated string.  Values are
+ *  concatenated left-to-right (bottom → top).  Numbers are coerced to strings.
+ *  Special cases: `n == 0` pushes an empty string; `n == 1` is a no-op.
+ *  Does NOT invoke `__concat` metamethods.
+ *
+ *  @param L  The Lua state.
+ *  @param n  Number of values to concatenate (must all be strings or numbers).
+ *  Stack: [..., s1, s2, ..., sN] → [..., s1..s2..sN] */
 void lua_concat(lua_State* L, int n)
 {
     api_checknelems(L, n);
@@ -2039,6 +2235,20 @@ void lua_concat(lua_State* L, int n)
     // else n == 1; nothing to do
 }
 
+/** @brief Allocates a GC-managed userdata block of `sz` bytes with a numeric tag.
+ *
+ *  Pushes a new full userdata onto the stack and returns a pointer to its
+ *  embedded data block.  Write your C struct into the returned pointer.
+ *
+ *  The `tag` (0 to LUA_UTAG_LIMIT-1) enables fast type dispatch via
+ *  `lua_touserdatatagged` and per-tag destructors via `lua_setuserdatadtor`.
+ *  `UTAG_PROXY` is a special reserved tag.
+ *
+ *  @param L    The Lua state.
+ *  @param sz   Size in bytes of the userdata payload.
+ *  @param tag  Numeric type tag.
+ *  @return     Pointer to the `sz`-byte data block (GC-managed lifetime).
+ *  Stack: [...] → [..., userdata] */
 void* lua_newuserdatatagged(lua_State* L, size_t sz, int tag)
 {
     api_check(L, unsigned(tag) < LUA_UTAG_LIMIT || tag == UTAG_PROXY);
@@ -2050,6 +2260,18 @@ void* lua_newuserdatatagged(lua_State* L, size_t sz, int tag)
     return u->data;
 }
 
+/** @brief Like `lua_newuserdatatagged` but automatically assigns the pre-registered metatable.
+ *
+ *  The metatable for `tag` must have been registered first via
+ *  `lua_setuserdatametatable`.  Asserts in debug builds if not registered.
+ *  The metatable assignment is done without a GC barrier (the object is newly
+ *  allocated white, so no barrier is needed).
+ *
+ *  @param L    The Lua state.
+ *  @param sz   Size in bytes of the userdata payload.
+ *  @param tag  Numeric type tag (must have a registered metatable).
+ *  @return     Pointer to the `sz`-byte data block.
+ *  Stack: [...] → [..., userdata] */
 void* lua_newuserdatataggedwithmetatable(lua_State* L, size_t sz, int tag)
 {
     api_check(L, unsigned(tag) < LUA_UTAG_LIMIT);
@@ -2070,6 +2292,21 @@ void* lua_newuserdatataggedwithmetatable(lua_State* L, size_t sz, int tag)
     return u->data;
 }
 
+/** @brief Allocates a userdata with an inline C destructor callback.
+ *
+ *  The destructor `dtor` is called by the GC when the userdata is collected,
+ *  receiving the data pointer as its argument.  The destructor pointer is
+ *  stored in the allocation immediately after `sz` bytes of user data
+ *  (using `UTAG_IDTOR` as the internal tag).
+ *
+ *  Use this when you need RAII-style cleanup (e.g. closing a file handle)
+ *  without registering a per-tag destructor via `lua_setuserdatadtor`.
+ *
+ *  @param L     The Lua state.
+ *  @param sz    Size in bytes of the userdata payload.
+ *  @param dtor  Destructor function called at GC time with the data pointer.
+ *  @return      Pointer to the `sz`-byte data block.
+ *  Stack: [...] → [..., userdata] */
 void* lua_newuserdatadtor(lua_State* L, size_t sz, void (*dtor)(void*))
 {
     luaC_checkGC(L);
@@ -2083,6 +2320,16 @@ void* lua_newuserdatadtor(lua_State* L, size_t sz, void (*dtor)(void*))
     return u->data;
 }
 
+/** @brief Allocates a new Luau buffer object of `sz` bytes and pushes it.
+ *
+ *  Luau buffers (`LUA_TBUFFER`) are mutable, fixed-size byte arrays — think
+ *  of them as a GC-managed `uint8_t[sz]`.  Access the data via `lua_tobuffer`.
+ *  Unlike userdata they have no tag, metatable, or destructor.
+ *
+ *  @param L   The Lua state.
+ *  @param sz  Byte size of the buffer.
+ *  @return    Pointer to the `sz`-byte data region.
+ *  Stack: [...] → [..., buffer] */
 void* lua_newbuffer(lua_State* L, size_t sz)
 {
     luaC_checkGC(L);
@@ -2119,6 +2366,17 @@ static const char* aux_upvalue(StkId fi, int n, TValue** val)
     }
 }
 
+/** @brief Pushes the n-th upvalue of the function at `funcindex`.
+ *
+ *  Upvalues are 1-indexed.  For C closures, returns "" as the name (upvalue
+ *  names are only stored for Lua closures).  Returns NULL and pushes nothing
+ *  if `n` is out of range.
+ *
+ *  @param L          The Lua state.
+ *  @param funcindex  Stack index of the function.
+ *  @param n          1-based upvalue index.
+ *  @return           Upvalue name (or "" for C closures), or NULL if out of range.
+ *  Stack (success): [...] → [..., upvalue] */
 const char* lua_getupvalue(lua_State* L, int funcindex, int n)
 {
     luaC_threadbarrier(L);
@@ -2132,6 +2390,16 @@ const char* lua_getupvalue(lua_State* L, int funcindex, int n)
     return name;
 }
 
+/** @brief Pops the top value and sets it as the n-th upvalue of the function.
+ *
+ *  Upvalues are 1-indexed.  Returns NULL and does nothing if `n` is out of
+ *  range.  Returns "" for C closures (which have unnamed upvalues).
+ *
+ *  @param L          The Lua state.
+ *  @param funcindex  Stack index of the function.
+ *  @param n          1-based upvalue index.
+ *  @return           Upvalue name (or "" for C closures), or NULL if out of range.
+ *  Stack: [..., new_value] → [...] */
 const char* lua_setupvalue(lua_State* L, int funcindex, int n)
 {
     api_checknelems(L, 1);
@@ -2147,12 +2415,36 @@ const char* lua_setupvalue(lua_State* L, int funcindex, int n)
     return name;
 }
 
+/** @brief Obfuscates a raw pointer for safe display in Lua (e.g. tostring output).
+ *
+ *  Applies a VM-wide random linear transformation to `p` so the actual ASLR
+ *  address is not exposed to scripts.  The encoding is consistent within one
+ *  VM lifetime but varies across runs.  Used by `luaL_tolstring` for the
+ *  default "TYPE: 0xADDR" formatting.
+ *
+ *  @param L  The Lua state.
+ *  @param p  Raw pointer value to encode.
+ *  @return   Encoded (obfuscated) pointer value. */
 uintptr_t lua_encodepointer(lua_State* L, uintptr_t p)
 {
     global_State* g = L->global;
     return uintptr_t((g->ptrenckey[0] * p + g->ptrenckey[2]) ^ (g->ptrenckey[1] * p + g->ptrenckey[3]));
 }
 
+/** @brief Creates a GC-rooted integer reference to the value at stack index `idx`.
+ *
+ *  Stores the value in the registry under a new integer key and returns that
+ *  key as the "ref" handle.  The value is protected from GC until `lua_unref`
+ *  is called.  Returns `LUA_REFNIL` if the value is nil.
+ *
+ *  This is the standard Luau way to hold a Lua value in C across multiple API
+ *  calls (replacing `luaL_ref`/`luaL_unref` from standard Lua).
+ *
+ *  To retrieve the value: `lua_rawgeti(L, LUA_REGISTRYINDEX, ref)`.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the value to reference (NOT removed from stack).
+ *  @return     An integer ref handle, or LUA_REFNIL. */
 int lua_ref(lua_State* L, int idx)
 {
     api_check(L, idx != LUA_REGISTRYINDEX); // idx is a stack index for value
@@ -2182,6 +2474,14 @@ int lua_ref(lua_State* L, int idx)
     return ref;
 }
 
+/** @brief Releases a reference created by `lua_ref`, allowing the value to be GC'd.
+ *
+ *  Frees the registry slot associated with `ref` for reuse.  Safe to call with
+ *  `LUA_REFNIL` or any value ≤ `LUA_REFNIL` (no-op).  After calling this, the
+ *  ref handle is invalid — do not use it again.
+ *
+ *  @param L    The Lua state.
+ *  @param ref  Reference handle returned by a previous `lua_ref` call. */
 void lua_unref(lua_State* L, int ref)
 {
     if (ref <= LUA_REFNIL)
@@ -2202,6 +2502,14 @@ void lua_unref(lua_State* L, int ref)
     g->registryfree = ref;
 }
 
+/** @brief Changes the numeric tag of the full userdata at `idx`.
+ *
+ *  Tag must be in range 0 to LUA_UTAG_LIMIT-1.  Changing the tag affects
+ *  subsequent `lua_touserdatatagged` checks and which per-tag destructor fires.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the full userdata.
+ *  @param tag  New tag value. */
 void lua_setuserdatatag(lua_State* L, int idx, int tag)
 {
     api_check(L, unsigned(tag) < LUA_UTAG_LIMIT);
@@ -2210,18 +2518,43 @@ void lua_setuserdatatag(lua_State* L, int idx, int tag)
     uvalue(o)->tag = uint8_t(tag);
 }
 
+/** @brief Registers a C destructor for ALL full userdata with the given tag.
+ *
+ *  The destructor is called by the GC when any userdata with this tag is
+ *  collected.  One destructor per tag; calling again overwrites the previous.
+ *  This is the per-type cleanup mechanism (as opposed to the per-object
+ *  `lua_newuserdatadtor` approach).
+ *
+ *  @param L     The Lua state.
+ *  @param tag   Userdata tag (0 to LUA_UTAG_LIMIT-1).
+ *  @param dtor  Destructor: `void dtor(lua_State* L, void* data)`. */
 void lua_setuserdatadtor(lua_State* L, int tag, lua_Destructor dtor)
 {
     api_check(L, unsigned(tag) < LUA_UTAG_LIMIT);
     L->global->udatagc[tag] = dtor;
 }
 
+/** @brief Retrieves the destructor registered for userdata with the given tag.
+ *
+ *  @param L    The Lua state.
+ *  @param tag  Userdata tag (0 to LUA_UTAG_LIMIT-1).
+ *  @return     The registered lua_Destructor, or NULL if none. */
 lua_Destructor lua_getuserdatadtor(lua_State* L, int tag)
 {
     api_check(L, unsigned(tag) < LUA_UTAG_LIMIT);
     return L->global->udatagc[tag];
 }
 
+/** @brief Registers the top-of-stack table as the default metatable for userdata `tag`.
+ *
+ *  Pops the table and stores it in `L->global->udatamt[tag]`.  Can only be
+ *  called once per tag (reassignment asserts in debug builds).  After this,
+ *  `lua_newuserdatataggedwithmetatable` will auto-assign this metatable to
+ *  all new userdata of that tag.
+ *
+ *  @param L    The Lua state.
+ *  @param tag  Userdata tag (0 to LUA_UTAG_LIMIT-1).
+ *  Stack: [..., metatable] → [...] */
 void lua_setuserdatametatable(lua_State* L, int tag)
 {
     api_check(L, unsigned(tag) < LUA_UTAG_LIMIT);
@@ -2231,6 +2564,11 @@ void lua_setuserdatametatable(lua_State* L, int tag)
     L->top--;
 }
 
+/** @brief Pushes the default metatable registered for userdata `tag`, or nil.
+ *
+ *  @param L    The Lua state.
+ *  @param tag  Userdata tag (0 to LUA_UTAG_LIMIT-1).
+ *  Stack: [...] → [..., metatable_or_nil] */
 void lua_getuserdatametatable(lua_State* L, int tag)
 {
     api_check(L, unsigned(tag) < LUA_UTAG_LIMIT);
@@ -2248,6 +2586,15 @@ void lua_getuserdatametatable(lua_State* L, int tag)
     api_incr_top(L);
 }
 
+/** @brief Associates a type name string with a light userdata tag.
+ *
+ *  Once set, `lua_typename` and error messages will use this name for light
+ *  userdata of this tag.  Can only be called once per tag.  The name string
+ *  is pinned (never collected by the GC).
+ *
+ *  @param L     The Lua state.
+ *  @param tag   Light userdata tag (0 to LUA_LUTAG_LIMIT-1).
+ *  @param name  Human-readable type name (e.g. "MyHandle"). */
 void lua_setlightuserdataname(lua_State* L, int tag, const char* name)
 {
     api_check(L, unsigned(tag) < LUA_LUTAG_LIMIT);
@@ -2259,6 +2606,11 @@ void lua_setlightuserdataname(lua_State* L, int tag, const char* name)
     }
 }
 
+/** @brief Returns the type name string registered for a light userdata tag, or NULL.
+ *
+ *  @param L    The Lua state.
+ *  @param tag  Light userdata tag (0 to LUA_LUTAG_LIMIT-1).
+ *  @return     The registered name string, or NULL if unset. */
 const char* lua_getlightuserdataname(lua_State* L, int tag)
 {
     api_check(L, unsigned(tag) < LUA_LUTAG_LIMIT);
@@ -2266,6 +2618,19 @@ const char* lua_getlightuserdataname(lua_State* L, int tag)
     return name ? getstr(name) : nullptr;
 }
 
+/** @brief Pushes a shallow clone of the Lua closure at `idx`.
+ *
+ *  Creates a new Closure object that shares the same `Proto` (bytecode +
+ *  constants) as the original but gets a fresh upvalue array initialised
+ *  from the original's current upvalue values.  The clone is independent —
+ *  subsequent upvalue mutations in one do not affect the other.
+ *
+ *  Useful for sandboxing: give each untrusted script a clone of a function
+ *  so its upvalue state cannot leak between invocations.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the Lua closure to clone (must be isLfunction).
+ *  Stack: [...] → [..., cloned_closure] */
 void lua_clonefunction(lua_State* L, int idx)
 {
     luaC_checkGC(L);
@@ -2280,6 +2645,14 @@ void lua_clonefunction(lua_State* L, int idx)
     api_incr_top(L);
 }
 
+/** @brief Removes all key-value entries from the table at `idx`.
+ *
+ *  Equivalent to iterating and nilling every key, but more efficient.
+ *  Throws if the table is read-only.  Does not release the table's allocated
+ *  hash/array capacity — the memory stays reserved.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table to clear. */
 void lua_cleartable(lua_State* L, int idx)
 {
     StkId t = index2addr(L, idx);
@@ -2290,6 +2663,15 @@ void lua_cleartable(lua_State* L, int idx)
     luaH_clear(tt);
 }
 
+/** @brief Pushes a shallow copy of the table at `idx`.
+ *
+ *  Creates a new table with the same keys and values (one level deep — nested
+ *  tables are NOT cloned, only the references are copied).  The new table
+ *  inherits the same hash/array layout but is a completely separate object.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table to clone.
+ *  Stack: [...] → [..., cloned_table] */
 void lua_clonetable(lua_State* L, int idx)
 {
     StkId t = index2addr(L, idx);
@@ -2300,23 +2682,60 @@ void lua_clonetable(lua_State* L, int idx)
     api_incr_top(L);
 }
 
+/** @brief Returns the `lua_Callbacks*` struct for hooking into VM events.
+ *
+ *  The `lua_Callbacks` struct (defined in `lualib.h`) exposes function
+ *  pointers called by the VM at key points:
+ *  - `interrupt`: called periodically during bytecode execution (debugger hook).
+ *  - `panic`: called on an unprotected error.
+ *  - `userthread`: called when a new coroutine is created.
+ *  - `useratom`: called to assign integer atoms to interned strings.
+ *  - `debugbreak`, `debugstep`, etc.: debugger integration hooks.
+ *
+ *  @param L  The Lua state.
+ *  @return   Pointer to the global lua_Callbacks struct (modify fields directly). */
 lua_Callbacks* lua_callbacks(lua_State* L)
 {
     return &L->global->cb;
 }
 
+/** @brief Sets the memory accounting category for subsequent allocations.
+ *
+ *  Luau tracks memory usage per category (0 to LUA_MEMORY_CATEGORIES-1).
+ *  Setting this before allocating userdata, buffers, etc. lets you query
+ *  per-category usage via `lua_totalbytes(L, category)`.
+ *
+ *  @param L         The Lua state.
+ *  @param category  Memory category index (0 to LUA_MEMORY_CATEGORIES-1). */
 void lua_setmemcat(lua_State* L, int category)
 {
     api_check(L, unsigned(category) < LUA_MEMORY_CATEGORIES);
     L->activememcat = uint8_t(category);
 }
 
+/** @brief Returns total GC-tracked memory usage in bytes.
+ *
+ *  - `category < 0`: returns total bytes across all categories.
+ *  - `category >= 0`: returns bytes charged to that specific category.
+ *
+ *  @param L         The Lua state.
+ *  @param category  Memory category (-1 for total, 0+ for per-category).
+ *  @return          Byte count. */
 size_t lua_totalbytes(lua_State* L, int category)
 {
     api_check(L, category < LUA_MEMORY_CATEGORIES);
     return category < 0 ? L->global->totalbytes : L->global->memcatbytes[category];
 }
 
+/** @brief Returns the allocator function and its userdata pointer.
+ *
+ *  Retrieves the `lua_Alloc` function set at VM creation time (via
+ *  `lua_newstate`).  If `ud` is non-NULL, the allocator's userdata pointer
+ *  is written there.
+ *
+ *  @param L   The Lua state.
+ *  @param ud  Out-param for the allocator's userdata (may be NULL).
+ *  @return    The lua_Alloc function pointer. */
 lua_Alloc lua_getallocf(lua_State* L, void** ud)
 {
     lua_Alloc f = L->global->frealloc;
