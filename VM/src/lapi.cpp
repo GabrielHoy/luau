@@ -134,12 +134,32 @@ const TValue* luaA_toobject(lua_State* L, int idx)
     return (p == luaO_nilobject) ? NULL : p;
 }
 
+/** @brief Internal helper — pushes an arbitrary TValue onto the stack.
+ *
+ *  Used by the debugger and auxiliary library to push values obtained from
+ *  internal VM structures without going through the normal index-based API.
+ *
+ *  @param L  The Lua state.
+ *  @param o  Pointer to a TValue to copy onto the top of the stack.
+ *  Stack: [...] → [..., value] */
 void luaA_pushobject(lua_State* L, const TValue* o)
 {
     setobj2s(L, L->top, o);
     api_incr_top(L);
 }
 
+/** @brief Ensures the stack has at least `size` additional free slots.
+ *
+ *  Grows the stack if needed.  Returns 1 on success, 0 if growing is not
+ *  possible (would exceed LUAI_MAXCSTACK).  Unlike `lua_rawcheckstack`, this
+ *  does NOT throw — the caller must check the return value.
+ *
+ *  Call this at the start of any C function that pushes a variable or
+ *  potentially large number of values (beyond the guaranteed LUA_MINSTACK).
+ *
+ *  @param L     The Lua state.
+ *  @param size  Number of additional stack slots required.
+ *  @return      1 if enough space is available (or was allocated), 0 on failure. */
 int lua_checkstack(lua_State* L, int size)
 {
     int res = 1;
@@ -175,12 +195,31 @@ int lua_checkstack(lua_State* L, int size)
     return res;
 }
 
+/** @brief Unconditionally grows the stack by `size` slots; panics on OOM.
+ *
+ *  Unlike `lua_checkstack`, this version does not return a status — it calls
+ *  `luaD_checkstack` which throws a Lua error if memory cannot be allocated.
+ *  Used in code paths where failure is genuinely unrecoverable.
+ *
+ *  @param L     The Lua state.
+ *  @param size  Number of additional stack slots to guarantee. */
 void lua_rawcheckstack(lua_State* L, int size)
 {
     luaD_checkstack(L, size);
     expandstacklimit(L, L->top + size);
 }
 
+/** @brief Moves `n` values from the top of `from`'s stack to `to`'s stack.
+ *
+ *  Both states must belong to the same global VM (`from->global == to->global`).
+ *  Values are popped from `from` and pushed onto `to` in order (bottom-most
+ *  first), preserving their relative order.  If `from == to`, this is a no-op.
+ *
+ *  @param from  Source Lua state (values are removed from here).
+ *  @param to    Destination Lua state (values are pushed here).
+ *  @param n     Number of values to move (must be ≤ stack size of `from`).
+ *  Stack (from): [..., v1, v2, ..., vN] → [...]
+ *  Stack (to):   [...] → [..., v1, v2, ..., vN] */
 void lua_xmove(lua_State* from, lua_State* to, int n)
 {
     if (from == to)
@@ -199,6 +238,15 @@ void lua_xmove(lua_State* from, lua_State* to, int n)
     to->top = ttop + n;
 }
 
+/** @brief Copies (not moves) the value at `from[idx]` onto `to`'s stack.
+ *
+ *  Unlike `lua_xmove`, the source value is NOT removed from `from`.  Both
+ *  states must share the same global VM.
+ *
+ *  @param from  Source Lua state (value is NOT removed).
+ *  @param to    Destination Lua state.
+ *  @param idx   Stack index in `from` of the value to copy.
+ *  Stack (to): [...] → [..., value] */
 void lua_xpush(lua_State* from, lua_State* to, int idx)
 {
     api_check(from, from->global == to->global);
@@ -207,6 +255,16 @@ void lua_xpush(lua_State* from, lua_State* to, int idx)
     api_incr_top(to);
 }
 
+/** @brief Creates a new coroutine (lua_State) sharing this VM's globals.
+ *
+ *  Allocates a new thread object, pushes it onto `L`'s stack, and fires the
+ *  `userthread` callback (if set in `lua_callbacks(L)->userthread`).  The new
+ *  thread starts in a "suspended" state with an empty stack; use
+ *  `lua_resume` to start it.
+ *
+ *  @param L  The parent Lua state.
+ *  @return   The new coroutine's lua_State* (also pushed onto L's stack).
+ *  Stack: [...] → [..., thread] */
 lua_State* lua_newthread(lua_State* L)
 {
     luaC_checkGC(L);
@@ -220,6 +278,14 @@ lua_State* lua_newthread(lua_State* L)
     return L1;
 }
 
+/** @brief Returns the main (root) thread of the VM that owns `L`.
+ *
+ *  Every Luau VM has exactly one main thread created by `lua_newstate`.
+ *  Coroutines created with `lua_newthread` share the same global state but
+ *  are NOT the main thread.
+ *
+ *  @param L  Any Lua state belonging to the VM.
+ *  @return   The main lua_State* of the VM. */
 lua_State* lua_mainthread(lua_State* L)
 {
     return L->global->mainthread;
@@ -229,17 +295,47 @@ lua_State* lua_mainthread(lua_State* L)
 ** basic stack manipulation
 */
 
+/** @brief Converts a (potentially negative) stack index to an absolute positive index.
+ *
+ *  Negative indices are relative to the top of the stack (-1 = top).  This
+ *  function converts them to positive indices (1 = base) that remain valid
+ *  even after push/pop operations change the stack top.  Pseudo-indices
+ *  (LUA_REGISTRYINDEX etc.) are returned unchanged.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index (positive, negative, or pseudo-index).
+ *  @return     Equivalent positive (absolute) stack index. */
 int lua_absindex(lua_State* L, int idx)
 {
     api_check(L, (idx > 0 && idx <= L->top - L->base) || (idx < 0 && -idx <= L->top - L->base) || lua_ispseudo(idx));
     return idx > 0 || lua_ispseudo(idx) ? idx : cast_int(L->top - L->base) + idx + 1;
 }
 
+/** @brief Returns the number of values currently on the stack (= index of the top).
+ *
+ *  An empty stack returns 0.  This value equals the highest valid positive
+ *  stack index: slot 1 is the bottom, slot `lua_gettop(L)` is the top.
+ *  Equivalent to: `top - base` in the internal stack layout.
+ *
+ *  @param L  The Lua state.
+ *  @return   Number of values on the stack (0 if empty). */
 int lua_gettop(lua_State* L)
 {
     return cast_int(L->top - L->base);
 }
 
+/** @brief Sets the stack top to the given index, growing or shrinking it.
+ *
+ *  - Positive `idx`: sets the top to that absolute position; new slots are
+ *    filled with nil if growing, excess values are discarded if shrinking.
+ *  - Negative `idx`: shrinks the stack by `|idx|-1` slots (e.g. -1 = no-op,
+ *    -2 = pop one value).
+ *  - `lua_settop(L, 0)` clears the entire stack.
+ *
+ *  `lua_pop(L, n)` is defined as `lua_settop(L, -(n)-1)`.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  New stack top: positive absolute index, or negative relative index. */
 void lua_settop(lua_State* L, int idx)
 {
     if (idx >= 0)
@@ -256,6 +352,14 @@ void lua_settop(lua_State* L, int idx)
     }
 }
 
+/** @brief Removes the element at stack index `idx`, shifting values down.
+ *
+ *  All values above `idx` shift down one position to close the gap.
+ *  The stack shrinks by one.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Index of the element to remove (must not be a pseudo-index).
+ *  Stack: [..., idx_val, a, b] → [..., a, b]  (idx_val removed) */
 void lua_remove(lua_State* L, int idx)
 {
     StkId p = index2addr(L, idx);
@@ -265,6 +369,17 @@ void lua_remove(lua_State* L, int idx)
     L->top--;
 }
 
+/** @brief Moves the top value to position `idx`, shifting values up.
+ *
+ *  The top value is removed from the top and inserted at `idx`.  All values
+ *  previously at `idx` and above shift up one position.  Stack size is unchanged.
+ *
+ *  Common use: after pushing a key for `lua_rawset(L, LUA_REGISTRYINDEX)` when
+ *  the table is already below, use `lua_insert` to reorder key and table.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Destination index for the top value (must not be a pseudo-index).
+ *  Stack: [..., a, b, top_val] → [..., top_val, a, b]  (idx points to where a was) */
 void lua_insert(lua_State* L, int idx)
 {
     luaC_threadbarrier(L);
@@ -275,6 +390,17 @@ void lua_insert(lua_State* L, int idx)
     setobj2s(L, p, L->top);
 }
 
+/** @brief Pops the top value and stores it at index `idx` (no shifting).
+ *
+ *  The value at `idx` is overwritten with the top value, and the top is
+ *  popped.  Stack shrinks by one.  Unlike `lua_insert`, no other slots move.
+ *
+ *  Special cases: `LUA_ENVIRONINDEX` replaces the current function's
+ *  environment; `LUA_GLOBALSINDEX` replaces the global table.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Destination index (may be a pseudo-index).
+ *  Stack: [..., new_val] → [...]  (idx slot now holds new_val) */
 void lua_replace(lua_State* L, int idx)
 {
     api_checknelems(L, 1);
@@ -303,6 +429,15 @@ void lua_replace(lua_State* L, int idx)
     L->top--;
 }
 
+/** @brief Duplicates the value at `idx` and pushes the copy onto the top.
+ *
+ *  The original value is not disturbed.  Stack grows by one.  Very commonly
+ *  used when you need to leave a value in place AND also use it as an
+ *  argument to another call.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Index of the value to duplicate.
+ *  Stack: [..., val] → [..., val, val] */
 void lua_pushvalue(lua_State* L, int idx)
 {
     luaC_threadbarrier(L);
@@ -315,6 +450,16 @@ void lua_pushvalue(lua_State* L, int idx)
 ** access functions (stack -> C)
 */
 
+/** @brief Returns the type tag of the value at stack index `idx`.
+ *
+ *  Returns one of the LUA_T* constants: LUA_TNIL, LUA_TBOOLEAN,
+ *  LUA_TNUMBER, LUA_TSTRING, LUA_TTABLE, LUA_TFUNCTION, LUA_TUSERDATA,
+ *  LUA_TTHREAD, LUA_TLIGHTUSERDATA, LUA_TVECTOR, LUA_TBUFFER.
+ *  Returns LUA_TNONE (-1) for an invalid (out-of-range) index.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     LUA_T* type constant, or LUA_TNONE if index is invalid. */
 int lua_type(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
