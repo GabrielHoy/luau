@@ -19,6 +19,18 @@ static const luaL_Reg lualibs[] = {
     {NULL, NULL},
 };
 
+/** @brief Opens all standard Luau libraries into the global environment.
+ *
+ *  Iterates the built-in `lualibs` registration table and calls each
+ *  `luaopen_*` function via `lua_call`, passing the library name string as
+ *  its argument.  After this call all standard globals are available:
+ *  `math`, `string`, `table`, `os`, `coroutine`, `debug`, `utf8`, `bit32`,
+ *  `buffer`, `vector`.
+ *
+ *  @note Luau intentionally omits `io`, `package`, and `require` — you must
+ *  inject those yourself (e.g. push a custom require via lua_pushcfunction).
+ *
+ *  @param L  The Lua state. */
 void luaL_openlibs(lua_State* L)
 {
     const luaL_Reg* lib = lualibs;
@@ -30,6 +42,18 @@ void luaL_openlibs(lua_State* L)
     }
 }
 
+/** @brief Locks down all standard library tables to prevent script modification.
+ *
+ *  Iterates the global table and calls `lua_setreadonly(true)` on every table
+ *  value found there.  Also marks the built-in string metatable and the
+ *  globals table itself as read-only, then sets `safeenv = true` on globals
+ *  so the VM can fast-path certain built-in operations.
+ *
+ *  Typical pattern: call `luaL_openlibs` then `luaL_sandbox` on the main
+ *  state, then `luaL_sandboxthread` on each new coroutine created for
+ *  untrusted script execution.
+ *
+ *  @param L  The main Lua state (not a sandboxed thread). */
 void luaL_sandbox(lua_State* L)
 {
     // set all libraries to read-only
@@ -59,6 +83,23 @@ void luaL_sandbox(lua_State* L)
     lua_setsafeenv(L, LUA_GLOBALSINDEX, true);
 }
 
+/** @brief Gives a thread its own writable globals table that proxies reads to
+ *         the (read-only) shared globals.
+ *
+ *  Creates a new table and attaches a metatable whose `__index` field points
+ *  at the current global table.  That metatable is itself marked read-only.
+ *  The new table is then installed as this thread's globals via
+ *  `lua_replace(L, LUA_GLOBALSINDEX)`.
+ *
+ *  Result: script code in this coroutine can define its own globals freely
+ *  without polluting the shared state, while reads for undefined names fall
+ *  through to the sandboxed standard library.
+ *
+ *  @note Must call `luaL_sandbox` on the main state first.
+ *  @note If the same thread loads code twice, reset safeenv to false between loads.
+ *
+ *  @param L  The coroutine thread to sandbox (typically freshly created with
+ *            lua_newthread). */
 void luaL_sandboxthread(lua_State* L)
 {
     // create new global table that proxies reads to original table
@@ -89,6 +130,22 @@ static void* l_alloc(void* ud, void* ptr, size_t osize, size_t nsize)
         return realloc(ptr, nsize);
 }
 
+/** @brief Creates a new Luau VM state using the default system allocator.
+ *
+ *  Wraps `lua_newstate` with a trivial `malloc`/`realloc`/`free` allocator.
+ *  For production embeddings you may want to supply your own allocator via
+ *  `lua_newstate` directly (e.g. for memory budgets or tracking).
+ *
+ *  Typical usage:
+ *  @code
+ *  lua_State* L = luaL_newstate();
+ *  luaL_openlibs(L);
+ *  // compile + load bytecode, then lua_pcall ...
+ *  lua_close(L);
+ *  @endcode
+ *
+ *  @return  A newly allocated lua_State*, or NULL if the initial allocation
+ *           failed. */
 lua_State* luaL_newstate(void)
 {
     return lua_newstate(l_alloc, NULL);
