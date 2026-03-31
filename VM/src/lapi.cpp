@@ -120,6 +120,14 @@ static LUAU_FORCEINLINE TValue* index2addr(lua_State* L, int idx)
     }
 }
 
+/** @brief Internal helper — converts a stack index to a raw TValue pointer.
+ *
+ *  Returns NULL (not luaO_nilobject) when the index is out of range or points
+ *  to an unset slot.  Used internally by the auxiliary library and debugger.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Any valid stack index (positive, negative, or pseudo-index).
+ *  @return     Pointer to the TValue at that index, or NULL. */
 const TValue* luaA_toobject(lua_State* L, int idx)
 {
     StkId p = index2addr(L, idx);
