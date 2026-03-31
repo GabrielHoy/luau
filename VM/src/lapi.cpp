@@ -931,12 +931,30 @@ void* lua_touserdata(lua_State* L, int idx)
         return NULL;
 }
 
+/** @brief Like `lua_touserdata` but only succeeds if the full userdata's tag matches.
+ *
+ *  Returns NULL if the value is not full userdata or if the tag differs.
+ *  Use this for fast type dispatch when you register multiple C types using
+ *  different numeric tags via `lua_newuserdatatagged`.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @param tag  Expected userdata tag (0 to LUA_UTAG_LIMIT-1).
+ *  @return     Data pointer if tag matches, NULL otherwise. */
 void* lua_touserdatatagged(lua_State* L, int idx, int tag)
 {
     StkId o = index2addr(L, idx);
     return (ttisuserdata(o) && uvalue(o)->tag == tag) ? uvalue(o)->data : NULL;
 }
 
+/** @brief Returns the numeric tag of the full userdata at `idx`.
+ *
+ *  Returns -1 if the value is not full userdata.  Tags are set at creation
+ *  time via `lua_newuserdatatagged` and can be changed with `lua_setuserdatatag`.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     Tag integer (0 to LUA_UTAG_LIMIT-1), or -1. */
 int lua_userdatatag(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
@@ -945,6 +963,14 @@ int lua_userdatatag(lua_State* L, int idx)
     return -1;
 }
 
+/** @brief Returns the numeric tag of the light userdata at `idx`.
+ *
+ *  Returns -1 if the value is not light userdata.  Light userdata tags are
+ *  set at push time via `lua_pushlightuserdatatagged`.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     Tag integer (0 to LUA_LUTAG_LIMIT-1), or -1. */
 int lua_lightuserdatatag(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
@@ -953,12 +979,30 @@ int lua_lightuserdatatag(lua_State* L, int idx)
     return -1;
 }
 
+/** @brief Returns the coroutine lua_State* for a thread value at `idx`.
+ *
+ *  Returns NULL if the value is not a thread.  The returned state is managed
+ *  by the GC; do not use it after it has been collected.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     lua_State* of the coroutine, or NULL. */
 lua_State* lua_tothread(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
     return (!ttisthread(o)) ? NULL : thvalue(o);
 }
 
+/** @brief Returns the data pointer for a Luau buffer value at `idx`.
+ *
+ *  Luau buffers (`LUA_TBUFFER`) are mutable byte arrays with a fixed size.
+ *  Returns NULL if the value is not a buffer.  If `len` is non-NULL it
+ *  receives the buffer's byte length.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @param len  Out-param for buffer byte length (may be NULL).
+ *  @return     Raw `void*` to the buffer data, or NULL. */
 void* lua_tobuffer(lua_State* L, int idx, size_t* len)
 {
     StkId o = index2addr(L, idx);
@@ -974,6 +1018,16 @@ void* lua_tobuffer(lua_State* L, int idx, size_t* len)
     return b->data;
 }
 
+/** @brief Returns a unique (but untyped) pointer for any GC-managed value.
+ *
+ *  For full userdata and light userdata, returns the data pointer.  For
+ *  all other collectable types (tables, functions, threads, strings, etc.),
+ *  returns the GC object header pointer.  Useful for identity comparison or
+ *  as a map key.  Returns NULL for non-collectable primitives (nil, bool, number).
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index.
+ *  @return     A stable pointer unique to this object, or NULL. */
 const void* lua_topointer(lua_State* L, int idx)
 {
     StkId o = index2addr(L, idx);
@@ -992,30 +1046,63 @@ const void* lua_topointer(lua_State* L, int idx)
 ** push functions (C -> stack)
 */
 
+/** @brief Pushes a nil value onto the stack.
+ *
+ *  @param L  The Lua state.
+ *  Stack: [...] → [..., nil] */
 void lua_pushnil(lua_State* L)
 {
     setnilvalue(L->top);
     api_incr_top(L);
 }
 
+/** @brief Pushes a double-precision floating-point number onto the stack.
+ *
+ *  Luau stores all numbers as doubles internally.
+ *
+ *  @param L  The Lua state.
+ *  @param n  The number to push.
+ *  Stack: [...] → [..., n] */
 void lua_pushnumber(lua_State* L, double n)
 {
     setnvalue(L->top, n);
     api_incr_top(L);
 }
 
+/** @brief Pushes an integer value onto the stack (stored internally as double).
+ *
+ *  @param L  The Lua state.
+ *  @param n  Integer value to push.
+ *  Stack: [...] → [..., n] */
 void lua_pushinteger(lua_State* L, int n)
 {
     setnvalue(L->top, cast_num(n));
     api_incr_top(L);
 }
 
+/** @brief Pushes an unsigned integer value onto the stack (stored as double).
+ *
+ *  @param L  The Lua state.
+ *  @param u  Unsigned value to push.
+ *  Stack: [...] → [..., u] */
 void lua_pushunsigned(lua_State* L, unsigned u)
 {
     setnvalue(L->top, cast_num(u));
     api_incr_top(L);
 }
 
+/** @brief Pushes a 4-component vector value (x, y, z, w) onto the stack.
+ *
+ *  Only available when LUA_VECTOR_SIZE == 4.  The 3-component variant is used
+ *  otherwise (see below).  Vectors are a native Luau value type (LUA_TVECTOR),
+ *  not tables — they live entirely on the stack with no GC allocation.
+ *
+ *  @param L  The Lua state.
+ *  @param x  X component.
+ *  @param y  Y component.
+ *  @param z  Z component.
+ *  @param w  W component.
+ *  Stack: [...] → [..., vector(x,y,z,w)] */
 #if LUA_VECTOR_SIZE == 4
 void lua_pushvector(lua_State* L, float x, float y, float z, float w)
 {
@@ -1030,6 +1117,16 @@ void lua_pushvector(lua_State* L, float x, float y, float z)
 }
 #endif
 
+/** @brief Pushes a string of exactly `len` bytes onto the stack.
+ *
+ *  The string is interned — if an identical string already exists in the VM,
+ *  the same object is reused.  Safe for strings with embedded NUL bytes.
+ *  May trigger a GC cycle (`luaC_checkGC`).
+ *
+ *  @param L    The Lua state.
+ *  @param s    Pointer to the string data (copied; caller may free immediately after).
+ *  @param len  Byte length of the string.
+ *  Stack: [...] → [..., string] */
 void lua_pushlstring(lua_State* L, const char* s, size_t len)
 {
     luaC_checkGC(L);
@@ -1038,6 +1135,14 @@ void lua_pushlstring(lua_State* L, const char* s, size_t len)
     api_incr_top(L);
 }
 
+/** @brief Pushes a NUL-terminated C string onto the stack, or nil if `s` is NULL.
+ *
+ *  Calls `lua_pushlstring` with `strlen(s)`.  Not safe for strings with
+ *  embedded NUL bytes — use `lua_pushlstring` for those.
+ *
+ *  @param L  The Lua state.
+ *  @param s  NUL-terminated string, or NULL (pushes nil).
+ *  Stack: [...] → [..., string]  (or [..., nil] if s==NULL) */
 void lua_pushstring(lua_State* L, const char* s)
 {
     if (s == NULL)
@@ -1046,6 +1151,16 @@ void lua_pushstring(lua_State* L, const char* s)
         lua_pushlstring(L, s, strlen(s));
 }
 
+/** @brief Formats a string using a va_list and pushes the result onto the stack.
+ *
+ *  Supports a subset of printf specifiers: `%s`, `%d`, `%f`, `%p`, `%q`, `%%`.
+ *  Returns a pointer to the pushed string data.
+ *
+ *  @param L     The Lua state.
+ *  @param fmt   Format string.
+ *  @param argp  Argument list (va_list).
+ *  @return      Pointer to the formatted string on the stack.
+ *  Stack: [...] → [..., formatted_string] */
 const char* lua_pushvfstring(lua_State* L, const char* fmt, va_list argp)
 {
     luaC_checkGC(L);
@@ -1054,6 +1169,17 @@ const char* lua_pushvfstring(lua_State* L, const char* fmt, va_list argp)
     return ret;
 }
 
+/** @brief Formats a string using varargs and pushes the result onto the stack.
+ *
+ *  Variadic wrapper around `lua_pushvfstring`.  Supports the same limited
+ *  format specifier set.  The `L` suffix distinguishes it from the macro
+ *  `lua_pushfstring` which is defined in lua.h.
+ *
+ *  @param L    The Lua state.
+ *  @param fmt  Format string.
+ *  @param ...  Format arguments.
+ *  @return     Pointer to the formatted string on the stack.
+ *  Stack: [...] → [..., formatted_string] */
 const char* lua_pushfstringL(lua_State* L, const char* fmt, ...)
 {
     luaC_checkGC(L);
@@ -1065,6 +1191,23 @@ const char* lua_pushfstringL(lua_State* L, const char* fmt, ...)
     return ret;
 }
 
+/** @brief Pushes a C closure with upvalues and an optional yield continuation.
+ *
+ *  This is the underlying function that `lua_pushcfunction(L, fn, name)` maps
+ *  to (in Luau, lua_pushcfunction takes 3 args: state, fn, debugname).
+ *
+ *  - `nup` values are popped from the stack and become the closure's upvalues
+ *    (accessible inside `fn` via upvalue pseudo-indices).
+ *  - `cont` is a continuation function called by the VM when a yield happens
+ *    inside a pcall that wraps this function.  Pass NULL for non-yieldable fns.
+ *  - `debugname` is stored for error messages and the debugger.
+ *
+ *  @param L          The Lua state.
+ *  @param fn         The C function to wrap.
+ *  @param debugname  Name shown in tracebacks (may be NULL).
+ *  @param nup        Number of upvalues to pop from stack into the closure.
+ *  @param cont       Yield continuation (may be NULL).
+ *  Stack: [..., up1, ..., upN] → [..., closure] */
 void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debugname, int nup, lua_Continuation cont)
 {
     luaC_checkGC(L);
@@ -1082,12 +1225,30 @@ void lua_pushcclosurek(lua_State* L, lua_CFunction fn, const char* debugname, in
     api_incr_top(L);
 }
 
+/** @brief Pushes a boolean value onto the stack.
+ *
+ *  Non-zero `b` is normalised to true (1).
+ *
+ *  @param L  The Lua state.
+ *  @param b  0 for false, any non-zero for true.
+ *  Stack: [...] → [..., boolean] */
 void lua_pushboolean(lua_State* L, int b)
 {
     setbvalue(L->top, (b != 0)); // ensure that true is 1
     api_incr_top(L);
 }
 
+/** @brief Pushes a tagged light userdata (raw pointer) onto the stack.
+ *
+ *  Light userdata is a bare `void*` — not GC-managed, no finalizer, not
+ *  collected.  The `tag` lets you distinguish multiple light-userdata "types"
+ *  at O(1) cost via `lua_tolightuserdatatagged`.
+ *  `lua_pushlightuserdata(L, p)` is the tag-0 shorthand macro.
+ *
+ *  @param L    The Lua state.
+ *  @param p    The raw pointer to push.
+ *  @param tag  Tag value (0 to LUA_LUTAG_LIMIT-1).
+ *  Stack: [...] → [..., lightuserdata] */
 void lua_pushlightuserdatatagged(lua_State* L, void* p, int tag)
 {
     api_check(L, unsigned(tag) < LUA_LUTAG_LIMIT);
@@ -1095,6 +1256,14 @@ void lua_pushlightuserdatatagged(lua_State* L, void* p, int tag)
     api_incr_top(L);
 }
 
+/** @brief Pushes the current thread (coroutine) `L` itself onto the stack.
+ *
+ *  Returns 1 if this thread is the main thread of the VM, 0 otherwise.
+ *  Useful when you need to pass the current coroutine as a Lua value.
+ *
+ *  @param L  The Lua state.
+ *  @return   1 if L is the main thread, 0 if it is a coroutine.
+ *  Stack: [...] → [..., thread] */
 int lua_pushthread(lua_State* L)
 {
     luaC_threadbarrier(L);
@@ -1107,6 +1276,16 @@ int lua_pushthread(lua_State* L)
 ** get functions (Lua -> stack)
 */
 
+/** @brief Performs a table read with full metamethod dispatch (`__index`).
+ *
+ *  Pops the key from the top of the stack, looks it up in the table at `idx`
+ *  (invoking `__index` if applicable), and pushes the result.  Net stack
+ *  change is zero (pop key, push value).
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table (or object with __index metamethod).
+ *  @return     LUA_T* type tag of the resulting value.
+ *  Stack: [..., key] → [..., value] */
 int lua_gettable(lua_State* L, int idx)
 {
     luaC_threadbarrier(L);
@@ -1116,6 +1295,16 @@ int lua_gettable(lua_State* L, int idx)
     return ttype(L->top - 1);
 }
 
+/** @brief Pushes `table[k]` onto the stack, invoking `__index` if applicable.
+ *
+ *  Equivalent to pushing the string key `k` then calling `lua_gettable`, but
+ *  without actually pushing the key.  Commonly used for `table.field` reads.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  @param k    String field name.
+ *  @return     LUA_T* type tag of the value.
+ *  Stack: [...] → [..., value] */
 int lua_getfield(lua_State* L, int idx, const char* k)
 {
     luaC_threadbarrier(L);
@@ -1128,6 +1317,16 @@ int lua_getfield(lua_State* L, int idx, const char* k)
     return ttype(L->top - 1);
 }
 
+/** @brief Pushes `table[k]` without invoking `__index` metamethods.
+ *
+ *  Direct hash lookup — no metamethod dispatch.  Requires the value at `idx`
+ *  to be a table (asserts in debug builds).
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  @param k    String field name.
+ *  @return     LUA_T* type tag of the value.
+ *  Stack: [...] → [..., value] */
 int lua_rawgetfield(lua_State* L, int idx, const char* k)
 {
     luaC_threadbarrier(L);
@@ -1140,6 +1339,16 @@ int lua_rawgetfield(lua_State* L, int idx, const char* k)
     return ttype(L->top - 1);
 }
 
+/** @brief Pops the key and pushes `table[key]` without invoking `__index`.
+ *
+ *  The key type is arbitrary (unlike `lua_rawgetfield` which requires a string).
+ *  Mandatory for registry operations — always use `lua_rawget`/`lua_rawset`
+ *  on `LUA_REGISTRYINDEX`, never the metamethod variants.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  @return     LUA_T* type tag of the value.
+ *  Stack: [..., key] → [..., value] */
 int lua_rawget(lua_State* L, int idx)
 {
     luaC_threadbarrier(L);
@@ -1149,6 +1358,15 @@ int lua_rawget(lua_State* L, int idx)
     return ttype(L->top - 1);
 }
 
+/** @brief Pushes `table[n]` (integer key) without invoking `__index`.
+ *
+ *  Optimised integer-keyed lookup in the table's array portion.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  @param n    Integer key.
+ *  @return     LUA_T* type tag of the value.
+ *  Stack: [...] → [..., value] */
 int lua_rawgeti(lua_State* L, int idx, int n)
 {
     luaC_threadbarrier(L);
@@ -1159,6 +1377,17 @@ int lua_rawgeti(lua_State* L, int idx, int n)
     return ttype(L->top - 1);
 }
 
+/** @brief Pushes `table[p, tag]` using a tagged pointer as the key; no metamethods.
+ *
+ *  Luau extension: allows using a `(void*, int tag)` pair as a table key,
+ *  enabling efficient C-pointer-keyed lookups without going through string hashing.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  @param p    Pointer key.
+ *  @param tag  Tag associated with the pointer key.
+ *  @return     LUA_T* type tag of the value.
+ *  Stack: [...] → [..., value] */
 int lua_rawgetptagged(lua_State* L, int idx, void* p, int tag)
 {
     luaC_threadbarrier(L);
@@ -1169,6 +1398,16 @@ int lua_rawgetptagged(lua_State* L, int idx, void* p, int tag)
     return ttype(L->top - 1);
 }
 
+/** @brief Pushes a new empty table with pre-allocated capacity.
+ *
+ *  Pre-allocating avoids repeated rehashing when you know the approximate
+ *  size upfront.  Both hints are advisory — the actual allocation may be
+ *  rounded up to a power of two.
+ *
+ *  @param L       The Lua state.
+ *  @param narray  Expected number of sequential integer keys (array part).
+ *  @param nrec    Expected number of hash-part keys (string/other keys).
+ *  Stack: [...] → [..., table] */
 void lua_createtable(lua_State* L, int narray, int nrec)
 {
     luaC_checkGC(L);
@@ -1177,6 +1416,16 @@ void lua_createtable(lua_State* L, int narray, int nrec)
     api_incr_top(L);
 }
 
+/** @brief Enables or disables write-protection on a table.
+ *
+ *  When a table is read-only, any attempt to write to it (including from Lua
+ *  code) throws a "attempt to modify a readonly table" error.  Cannot be
+ *  applied to the registry itself.  Used by `luaL_sandbox` to freeze standard
+ *  library tables.
+ *
+ *  @param L          The Lua state.
+ *  @param objindex   Stack index of the table.
+ *  @param enabled    1 to make read-only, 0 to make writable again. */
 void lua_setreadonly(lua_State* L, int objindex, int enabled)
 {
     const TValue* o = index2addr(L, objindex);
@@ -1186,6 +1435,11 @@ void lua_setreadonly(lua_State* L, int objindex, int enabled)
     t->readonly = bool(enabled);
 }
 
+/** @brief Returns 1 if the table at `objindex` is write-protected, 0 otherwise.
+ *
+ *  @param L          The Lua state.
+ *  @param objindex   Stack index of the table.
+ *  @return           1 if read-only, 0 if writable. */
 int lua_getreadonly(lua_State* L, int objindex)
 {
     const TValue* o = index2addr(L, objindex);
@@ -1195,6 +1449,16 @@ int lua_getreadonly(lua_State* L, int objindex)
     return res;
 }
 
+/** @brief Marks a table as a "safe environment" for VM fast-path optimisations.
+ *
+ *  When `safeenv` is true, the VM can assume certain globals (e.g. `math.abs`,
+ *  `string.format`) have not been overridden, enabling inlining.  Set to false
+ *  if you load code into a sandboxed thread more than once (to clear stale
+ *  inline caches).
+ *
+ *  @param L          The Lua state.
+ *  @param objindex   Stack index of the globals table.
+ *  @param enabled    1 to mark as safe, 0 to invalidate. */
 void lua_setsafeenv(lua_State* L, int objindex, int enabled)
 {
     const TValue* o = index2addr(L, objindex);
@@ -1203,6 +1467,17 @@ void lua_setsafeenv(lua_State* L, int objindex, int enabled)
     t->safeenv = bool(enabled);
 }
 
+/** @brief Pushes the metatable of the value at `objindex`, if it has one.
+ *
+ *  - Tables and full userdata: push their per-object metatable.
+ *  - Other types: push the type-shared metatable (set via `lua_setmetatable`
+ *    with a non-table object index, stored in `L->global->mt[type]`).
+ *  Returns 0 and pushes nothing if there is no metatable.
+ *
+ *  @param L          The Lua state.
+ *  @param objindex   Stack index of the value to inspect.
+ *  @return           1 if a metatable was found and pushed, 0 otherwise.
+ *  Stack (success): [...] → [..., metatable] */
 int lua_getmetatable(lua_State* L, int objindex)
 {
     luaC_threadbarrier(L);
@@ -1228,6 +1503,16 @@ int lua_getmetatable(lua_State* L, int objindex)
     return mt != NULL;
 }
 
+/** @brief Pushes the environment table of a function or thread.
+ *
+ *  @warning **Luau restriction**: unlike Lua 5.1, this only works for
+ *  `LUA_TFUNCTION` and `LUA_TTHREAD`.  Calling it on userdata pushes nil.
+ *  This is why the AwesomeWM shim layer must replace `lua_getfenv` on userdata
+ *  with the registry-keyed-by-pointer pattern.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of a function or thread.
+ *  Stack: [...] → [..., env_table]  (or [..., nil] for non-function/thread) */
 void lua_getfenv(lua_State* L, int idx)
 {
     luaC_threadbarrier(L);
@@ -1252,6 +1537,14 @@ void lua_getfenv(lua_State* L, int idx)
 ** set functions (stack -> Lua)
 */
 
+/** @brief Pops key and value and performs a table write with `__newindex` dispatch.
+ *
+ *  Equivalent to `table[key] = value` in Lua, invoking `__newindex` if set.
+ *  Both key and value are popped; stack shrinks by 2.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  Stack: [..., key, value] → [...] */
 void lua_settable(lua_State* L, int idx)
 {
     api_checknelems(L, 2);
@@ -1261,6 +1554,15 @@ void lua_settable(lua_State* L, int idx)
     L->top -= 2; // pop index and value
 }
 
+/** @brief Pops the top value and stores it as `table[k]`, invoking `__newindex`.
+ *
+ *  Equivalent to `table.k = value` in Lua.  The value is popped; stack
+ *  shrinks by 1.
+ *
+ *  @param L    The Lua state.
+ *  @param idx  Stack index of the table.
+ *  @param k    String field name.
+ *  Stack: [..., value] → [...] */
 void lua_setfield(lua_State* L, int idx, const char* k)
 {
     api_checknelems(L, 1);
