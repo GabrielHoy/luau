@@ -29,6 +29,18 @@ static Proto* getluaproto(CallInfo* ci)
     return (isLua(ci) ? cast_to(Proto*, ci_func(ci)->l.p) : NULL);
 }
 
+/** @brief Pushes the N-th argument of the Lua function at call-stack level `level`.
+ *
+ *  `level` 0 is the currently running function, 1 is its caller, and so on.
+ *  `n` is 1-based.  Both fixed parameters and variadic arguments are accessible.
+ *  Native (JIT-compiled) frames are excluded for safety.
+ *
+ *  Stack: [-0, +0|+1, -]
+ *
+ *  @param L      The Lua state.
+ *  @param level  Call-stack depth (0 = current function).
+ *  @param n      1-based argument index.
+ *  @return       1 if the argument was found and pushed, 0 otherwise. */
 int lua_getargument(lua_State* L, int level, int n)
 {
     if (unsigned(level) >= unsigned(L->ci - L->base_ci))
@@ -61,6 +73,19 @@ int lua_getargument(lua_State* L, int level, int n)
     return res;
 }
 
+/** @brief Pushes the N-th local variable of the Lua function at call-stack level `level`.
+ *
+ *  `level` 0 is the currently executing function.  `n` is 1-based and follows the
+ *  order locals are declared in the source.  The pushed value reflects the current
+ *  register contents at the point of the call.
+ *  Native (JIT-compiled) frames are excluded for safety.
+ *
+ *  Stack: [-0, +0|+1, -]
+ *
+ *  @param L      The Lua state.
+ *  @param level  Call-stack depth (0 = current function).
+ *  @param n      1-based local variable index.
+ *  @return       The variable's name, or NULL if `level` or `n` is out of range. */
 const char* lua_getlocal(lua_State* L, int level, int n)
 {
     if (unsigned(level) >= unsigned(L->ci - L->base_ci))
@@ -82,6 +107,19 @@ const char* lua_getlocal(lua_State* L, int level, int n)
     return name;
 }
 
+/** @brief Sets the N-th local variable of the Lua function at call-stack level `level`.
+ *
+ *  Pops the new value from the top of the stack and assigns it to the local register.
+ *  `level` 0 is the currently executing function.  `n` is 1-based.
+ *  Native (JIT-compiled) frames are excluded to avoid invalidating register type tags.
+ *
+ *  Stack: [-1, +0, -]
+ *
+ *  @param L      The Lua state.
+ *  @param level  Call-stack depth (0 = current function).
+ *  @param n      1-based local variable index.
+ *  @return       The variable's name, or NULL if `level` or `n` is out of range
+ *                (the value is still popped in either case). */
 const char* lua_setlocal(lua_State* L, int level, int n)
 {
     if (unsigned(level) >= unsigned(L->ci - L->base_ci))
@@ -175,11 +213,42 @@ static Closure* auxgetinfo(lua_State* L, const char* what, lua_Debug* ar, Closur
     return cl;
 }
 
+/** @brief Returns the number of active call frames on the Lua call stack.
+ *
+ *  Equivalent to the maximum `level` value accepted by lua_getinfo / lua_getlocal
+ *  (levels are 0-based, so the deepest valid level is lua_stackdepth(L) - 1).
+ *
+ *  Stack: [-0, +0, -]
+ *
+ *  @param L  The Lua state.
+ *  @return   Number of frames currently on the call stack (0 if at top level). */
 int lua_stackdepth(lua_State* L)
 {
     return int(L->ci - L->base_ci);
 }
 
+/** @brief Fills a lua_Debug structure with information about a function or call frame.
+ *
+ *  `level` selects the call frame:
+ *  - Non-negative values index into the call stack (0 = currently running function).
+ *  - Negative values index a function object on the Lua value stack
+ *    (e.g. -1 = top-of-stack, which must be a function).
+ *
+ *  `what` is a string of option characters controlling which fields are populated:
+ *  - `'s'` — source/short_src, what, linedefined
+ *  - `'l'` — currentline
+ *  - `'u'` — nupvals
+ *  - `'a'` — nparams, isvararg
+ *  - `'n'` — name (function debug name)
+ *  - `'f'` — pushes the closure itself onto the stack
+ *
+ *  Stack: [-0, +0|+1, -]   (+1 only when `what` contains 'f')
+ *
+ *  @param L      The Lua state.
+ *  @param level  Call-stack depth or negative stack index of a function value.
+ *  @param what   Option string selecting which lua_Debug fields to fill.
+ *  @param ar     Output structure to receive the debug information.
+ *  @return       1 on success, 0 if `level` is out of range or the stack value is not a function. */
 int lua_getinfo(lua_State* L, int level, const char* what, lua_Debug* ar)
 {
     Closure* f = NULL;
@@ -436,6 +505,16 @@ int luaG_hasnative(lua_State* L, int level)
     return (proto->execdata != nullptr);
 }
 
+/** @brief Enables or disables single-step debug mode for the given Lua state.
+ *
+ *  When enabled, the VM fires the "debugstep" callback (lua_callbacks(L)->debugstep)
+ *  before executing each instruction, allowing a debugger to inspect state.
+ *  Has no effect if no debugstep callback is installed.
+ *
+ *  Stack: [-0, +0, -]
+ *
+ *  @param L        The Lua state.
+ *  @param enabled  Non-zero to enable single-step mode, zero to disable. */
 void lua_singlestep(lua_State* L, int enabled)
 {
     L->singlestep = bool(enabled);
@@ -497,6 +576,24 @@ static int getnextline(Proto* p, int line)
     return closest;
 }
 
+/** @brief Sets or clears a breakpoint at the nearest valid source line in a Lua function.
+ *
+ *  Patches the bytecode of the function at `funcindex` (which must be a Lua closure,
+ *  not a C function) so that execution at `line` triggers a LOP_BREAK instruction.
+ *  If `line` has no instruction, the breakpoint is placed at the next line that does.
+ *  Breakpoints are applied recursively to all nested Proto definitions within the closure.
+ *
+ *  If native code generation is active for the proto and a disable callback is installed,
+ *  native execution is disabled so the interpreter path (and thus the breakpoint) is used.
+ *
+ *  Stack: [-0, +0, -]
+ *
+ *  @param L          The Lua state.
+ *  @param funcindex  Stack index of the target Lua closure (must not be a C closure).
+ *  @param line       Source line number at which to set/clear the breakpoint.
+ *  @param enabled    Non-zero to set the breakpoint, zero to clear it.
+ *  @return           The actual line number where the breakpoint was placed,
+ *                    or -1 if no valid instruction line was found. */
 int lua_breakpoint(lua_State* L, int funcindex, int line, int enabled)
 {
     const TValue* func = luaA_toobject(L, funcindex);
@@ -539,6 +636,22 @@ static void getcoverage(Proto* p, int depth, int* buffer, size_t size, void* con
         getcoverage(p->p[i], depth + 1, buffer, size, context, callback);
 }
 
+/** @brief Visits coverage counter data for every Proto reachable from a Lua closure.
+ *
+ *  Iterates over all LOP_COVERAGE instructions in the closure at `funcindex` and in
+ *  all nested sub-functions, invoking `callback` once per Proto with an integer array
+ *  indexed by source line.  Each element holds the maximum hit count seen for that
+ *  line, or -1 if the line has no coverage instruction.
+ *
+ *  The function at `funcindex` must be a Lua closure (not a C function).
+ *
+ *  Stack: [-0, +0, m]
+ *
+ *  @param L          The Lua state.
+ *  @param funcindex  Stack index of the target Lua closure.
+ *  @param context    Opaque pointer forwarded to every `callback` invocation.
+ *  @param callback   Called once per Proto: (context, debugname, linedefined,
+ *                    depth, hits_array, array_size). */
 void lua_getcoverage(lua_State* L, int funcindex, void* context, lua_Coverage callback)
 {
     const TValue* func = luaA_toobject(L, funcindex);
@@ -617,6 +730,20 @@ static size_t append(char* buf, size_t bufsize, size_t offset, const char* data)
     return offset + copy;
 }
 
+/** @brief Returns a human-readable stack trace string for the given Lua state.
+ *
+ *  Formats up to 20 frames (10 from the top, 10 from the bottom) into a static
+ *  4096-byte buffer using lua_getinfo "sln".  Each line shows the short source path,
+ *  current line number, and function name where available.
+ *
+ *  @warning NOT thread-safe.  The returned pointer refers to a single static buffer
+ *           shared across all calls.  Copy the string immediately if you need to
+ *           retain it across another call or across threads.
+ *
+ *  Stack: [-0, +0, -]
+ *
+ *  @param L  The Lua state whose call stack should be traced.
+ *  @return   Pointer to a NUL-terminated static string containing the trace. */
 const char* lua_debugtrace(lua_State* L)
 {
     static char buf[4096];

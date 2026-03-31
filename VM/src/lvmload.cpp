@@ -645,6 +645,28 @@ static int loadsafe(
     return 0;
 }
 
+/** @brief Deserializes and loads pre-compiled Luau bytecode onto the stack.
+ *
+ *  Unlike Lua's luaL_loadstring/luaL_loadbuffer, this function accepts ONLY
+ *  pre-compiled Luau bytecode produced by the Luau compiler (luau_compile).
+ *  It does NOT accept Lua source text.
+ *
+ *  On success, pushes a Lua function (closure) onto the stack and returns 0.
+ *  On error, pushes an error message string and returns a non-zero status code.
+ *
+ *  Stack: [-0, +1, m]
+ *
+ *  @param L          The Lua state.
+ *  @param chunkname  Name used in error messages and debug info (e.g. "=script" or "@file.luau").
+ *  @param data       Pointer to the compiled bytecode buffer.
+ *  @param size       Size of the bytecode buffer in bytes.
+ *  @param env        Stack index of the environment table to use, or 0 for the global environment.
+ *  @return           0 on success, non-zero (LUA_ERRMEM) on out-of-memory.
+ *
+ *  @note The bytecode must have been produced by luau_compile() — passing raw source
+ *        text will fail with a bytecode version error.
+ *  @note GC is paused for the duration of deserialization to avoid collecting
+ *        partially-constructed objects. */
 int luau_load(lua_State* L, const char* chunkname, const char* data, size_t size, int env)
 {
     // we will allocate a fair amount of memory so check GC before we do

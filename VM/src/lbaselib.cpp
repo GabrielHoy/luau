@@ -491,6 +491,20 @@ static void auxopen(lua_State* L, const char* name, lua_CFunction f, lua_CFuncti
     lua_setfield(L, -2, name);
 }
 
+/** @brief Opens the base library, registering core globals into the state.
+ *
+ *  Registers into the global environment: assert, error, gcinfo, getfenv, getmetatable,
+ *  next, newproxy, print, rawequal, rawget, rawset, rawlen, select, setfenv,
+ *  setmetatable, tonumber, tostring, type, typeof, ipairs, pairs, pcall, xpcall.
+ *
+ *  Also sets up _G (reference to the global table) and _VERSION = "Luau".
+ *
+ *  @param L  The Lua state.
+ *  @return   1 — pushes the global table onto the stack (standard luaL_register convention).
+ *
+ *  @note The `require` function is NOT registered by this library in Luau's base lib;
+ *        it must be provided separately by the host (e.g. via lua_callbacks or by
+ *        pushing a custom closure into the global table as "require"). */
 int luaopen_base(lua_State* L)
 {
     // set global _G
